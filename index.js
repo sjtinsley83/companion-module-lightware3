@@ -16,33 +16,30 @@ function instance(system, id, config) {
 	self.deviceType = DTYPE_UNKNOWN;
 	self.inputs = {};
 	self.outputs = {};
+	self.presets = {};
 
 	self.CHOICES_INPUTS = [];
 	self.CHOICES_OUTPUTS = [];
+	self.CHOICES_PRESETS = [];
 
 	// super-constructor
 	instance_skel.apply(this, arguments);
-
 	self.actions(); // export actions
-
 	return self;
 }
 
 instance.prototype.updateConfig = function(config) {
 	var self = this;
-
 	self.config = config;
 	self.init_tcp();
 };
 
 instance.prototype.init = function() {
 	var self = this;
-
 	debug = self.debug;
 	log = self.log;
-
 	self.status(self.STATE_UNKNOWN);
-
+	self.init_feedbacks()
 	self.init_tcp();
 };
 
@@ -74,6 +71,7 @@ instance.prototype.init_tcp = function() {
 
 		self.socket.on('connect', function () {
 			self.initDevice();
+			self.init_feedbacks();
 		});
 
 		self.socket.on('error', function (err) {
@@ -123,8 +121,10 @@ instance.prototype.init_tcp = function() {
 				}
 			}
 		});
+
 	}
 };
+
 
 instance.prototype.sendCommand = function(command, cb) {
 	var self = this;
@@ -146,8 +146,7 @@ instance.prototype.initDevice = function() {
 
 		log('info', 'Connected to an ' + result);
 
-		if (result.match(/OPTC-[TR]X|MMX6x2|MMX4x2|UMX-TPS-[TR]X100/) ||
-			result.match(/(^MEX-)|HDMI-TPS-[TR]X200|HDMI-3D-OPT|SW4-OPT|MODEX/)) {
+		if (result.match(/OPTC-[TR]X|MMX6x2|MMX4x2|UMX-TPS-[TR]X100/) || result.match(/(^MEX-)|HDMI-TPS-[TR]X200|HDMI-3D-OPT|SW4-OPT|MODEX/)) {
 			self.deviceType = DTYPE_GENERAL;
 			self.initGENERAL();
 		}
@@ -160,6 +159,11 @@ instance.prototype.initDevice = function() {
 			self.initMX2();
 		}
 	});
+
+	self.sendCommand('OPEN /MEDIA/PRESET', function (result) {
+		debug('Subscription: ' + result);
+	});
+
 };
 
 instance.prototype.initGENERAL = function() {
@@ -187,6 +191,7 @@ instance.prototype.initGENERAL = function() {
 				}
 			}
 		}
+
 	});
 };
 
@@ -216,6 +221,21 @@ instance.prototype.initMX2 = function() {
 			}
 		}
 	});
+
+	// BUILD PRESET LIST
+	self.sendCommand('GET /MEDIA/PRESET', function (result) {
+		var list = result.split(/\r\n/);
+		self.CHOICES_PRESETS.length = 0;
+		for (var i in list) {
+			var preset_name = list[i].slice(14);
+			if (preset_name) {
+				self.presets[preset_name] = preset_name;
+				self.CHOICES_PRESETS.push({ label: preset_name, id: preset_name });
+			}
+		}
+	});
+
+
 };
 
 // Return config fields for web config
@@ -239,17 +259,34 @@ instance.prototype.config_fields = function () {
 	]
 };
 
+
 // When module gets deleted
 instance.prototype.destroy = function() {
 	var self = this;
-
 	if (self.socket !== undefined) {
 		self.socket.destroy();
 	}
-
 	debug("destroy", self.id);
 };
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*--------ACTIONS--------*/
 
 instance.prototype.actions = function(system) {
 	var self = this;
@@ -271,13 +308,24 @@ instance.prototype.actions = function(system) {
 					choices: self.CHOICES_OUTPUTS
 				}
 			]
+		},
+		'preset': {
+			label: 'Preset',
+			options: [
+				{
+					label: 'Preset - Select unit preset',
+					type: 'dropdown',
+					id: 'preset',
+					choices: self.CHOICES_PRESETS
+				}
+			]
 		}
+
 	});
 }
 
 instance.prototype.GENERAL_XPT = function(opt) {
 	var self = this;
-
 	self.sendCommand('CALL /MEDIA/VIDEO/XP:switch(' + opt.input + ':' + opt.output + ')', function (result) {
 		log('info', 'XPT Result: ' + result);
 	});
@@ -285,8 +333,14 @@ instance.prototype.GENERAL_XPT = function(opt) {
 
 instance.prototype.MX2_XPT = function(opt) {
 	var self = this;
-
 	self.sendCommand('CALL /MEDIA/XP/VIDEO:switch(' + opt.input + ':' + opt.output + ')', function (result) {
+		log('info', 'XPT Result: ' + result);
+	});
+};
+
+instance.prototype.PRESET = function(opt) {
+	var self = this;
+	self.sendCommand('CALL /MEDIA/PRESET/' + opt.preset + ':load()', function (result) {
 		log('info', 'XPT Result: ' + result);
 	});
 };
@@ -294,19 +348,97 @@ instance.prototype.MX2_XPT = function(opt) {
 
 instance.prototype.action = function(action) {
 	var self = this;
+	var id = action.action;
 	var cmd;
 	var opt = action.options;
 
-	switch (action.action) {
-
+	switch (id) {
 		case 'xpt':
 			self[self.deviceType + '_XPT'](opt);
-			break;
+		break
 
+		case 'preset':
+			self.PRESET(opt);
+		break
 	}
-	debug('action():', action);
 
+	debug('action():', action);
 };
+
+
+
+
+
+
+/*--------FEEDBACKS--------*/
+
+instance.prototype.init_feedbacks = function() {
+	var self = this;
+	var feedbacks = {};
+
+	feedbacks['input_bg'] = {
+		label: 'Change background color by destination',
+		description: 'If the input specified is in use by the output specified, change background color of the bank',
+		options: [
+			{
+				type: 'colorpicker',
+				label: 'Foreground color',
+				id: 'fg',
+				default: this.rgb(0,0,0)
+			},
+			{
+				type: 'colorpicker',
+				label: 'Background color',
+				id: 'bg',
+				default: this.rgb(255,255,0)
+			},
+			{
+				type: 'dropdown',
+				label: 'Input',
+				id: 'input',
+				default: '0',
+				choices: this.CHOICES_INPUTS
+			},
+			{
+				type: 'dropdown',
+				label: 'Output',
+				id: 'output',
+				default: '0',
+				choices: this.CHOICES_OUTPUTS
+			}
+		]
+	};
+	self.setFeedbackDefinitions(feedbacks)
+};
+
+
+
+
+
+
+
+instance.prototype.feedback = function(feedback, bank) {
+	var self = this;
+
+	debug("FEEDBACK OPTIONS: " + feedback.options)
+	debug("FEEDBACK TYPE: " + feedback.type)
+
+	// if (feedback.type = 'xpt_color') {
+	// 	var bg = feedback.options.bg;
+	//
+	// 	if (self.xpt[parseInt(feedback.options.output)] == parseInt(feedback.options.input)) {
+	// 		return {
+	// 			color: feedback.options.fg,
+	// 			bgcolor: feedback.options.bg
+	// 		};
+	// 	}
+	// }
+};
+
+
+
+
+
 
 instance_skel.extendedBy(instance);
 exports = module.exports = instance;
