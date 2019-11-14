@@ -92,7 +92,8 @@ instance.prototype.init_tcp = function() {
 		});
 
 		self.socket.on('receiveline', function (line) {
-			if (self.pstate == PSTATE_READY) {
+			debug("Received line: ", line);
+			/*if (self.pstate == PSTATE_READY) {
 				if (line.substr(0, 1) == '{') {
 					self.pstate = PSTATE_MULTILINE;
 					self.multiline = '';
@@ -119,7 +120,7 @@ instance.prototype.init_tcp = function() {
 						self.multiline += line.substr(3) + "\r\n";
 					}
 				}
-			}
+			}*/
 		});
 
 	}
